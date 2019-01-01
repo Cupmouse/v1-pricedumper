@@ -4,10 +4,19 @@ import os
 from enum import Enum
 import datetime
 import time
+import logging
 
 import websocket
 import json
 import urllib.request
+
+
+'''
+
+Do not use ws.send, use self.send_message instead.
+self.send_message emits event for a listener
+
+'''
 
 
 '''Utilities'''
@@ -17,7 +26,9 @@ import urllib.request
 class EventType(Enum):
     OPEN = 0
     MSG = 1
-    EOF = 2
+    EMIT = 2
+    ERR = 3
+    EOF = 4
 
 
 # Listener serves some functions when caller passes messages by the function on_event
@@ -28,6 +39,8 @@ class Listener:
 
 # Listener which saves messages to file
 class FileWriteListener(Listener):
+    # File format version of this listener, if file format changes, increment this value
+    FILE_WRITE_LISTENER_VERSION = 0
     NEW_FILE_INTERVAL = 24  # Hours
 
     def __init__(self, directory, prefix):
@@ -39,6 +52,8 @@ class FileWriteListener(Listener):
         # Disable file reopening if True
         # self.disable_renewing = True
         self.open_new_file()
+        # Setup logger
+        self.logger = logging.getLogger('FileWriteListener/%s' % prefix)
 
     def close_if_not(self):
         # x and y = if x is False then not evaluate y, about y is the same
@@ -55,7 +70,8 @@ class FileWriteListener(Listener):
         file_path = self.directory + self.prefix + '.' + formatted_datetime + '.json.lines'
 
         # Making directories if not exist
-        os.makedirs(self.directory)
+        if not os.path.exists(self.directory):
+            os.makedirs(self.directory)
 
         # Opening file
         self.file = open(file_path, 'a')
@@ -64,7 +80,7 @@ class FileWriteListener(Listener):
         self.last_time_opened = now
 
     def on_event(self, call_type, message):
-        if call_type == EventType.MSG:
+        if call_type == EventType.MSG or call_type == EventType.EMIT or call_type == EventType.ERR:
             # Received meaningful message, record it
 
             # Before writing to file instance, check if it's opened, if not, open new file
@@ -77,13 +93,18 @@ class FileWriteListener(Listener):
                 self.open_new_file()
             elif self.file.closed:
                 # Reopen file (in another name)
-                print('file already closed, reopening...')
+                self.logger.warn('file already closed, reopening...')
                 self.open_new_file()
 
-            self.file.write(message + '\n')
+            if call_type == EventType.MSG:
+                self.file.write(message + '\n')
+            elif call_type == EventType.EMIT:
+                self.file.write('emit,' + message + '\n')
+            elif call_type == EventType.ERR:
+                self.file.write('error,' + message + '\n')
         elif call_type == EventType.OPEN:
-            # It have to do nothing when stream from caller is opened
-            pass
+            # Write file that from this line, new stream appears
+            self.file.write('head,%d,%s\n' % (self.FILE_WRITE_LISTENER_VERSION, message))
         elif call_type == EventType.EOF:
             # Stream from caller is ended, we can no longer expect any more messages, closing file
             self.close_if_not()
@@ -99,6 +120,10 @@ class FileWriteListener(Listener):
 class Dumper:
     def __init__(self):
         self._listener = None
+        self.logger = self.create_logger()
+
+    def create_logger(self):
+        return None
 
     @property
     def listener(self):
@@ -112,7 +137,7 @@ class Dumper:
         try:
             self._listener.on_event(call_type, message)
         except:
-            print('encountered an error in listener handling')
+            self.logger.error('encountered an error in listener handling')
             traceback.print_exc()
 
     def do_dump(self):
@@ -121,6 +146,8 @@ class Dumper:
 
 # Dumps WebSocket stream
 class WebSocketDumper(Dumper):
+    # Message format version of this dumper, increase this if format changes
+    WEB_SOCKET_DUMPER_VERSION = 0
     DEFAULT_RECONNECTION_TIME = 1  # Default reconnection time is 1 second
     MAX_RECONNECTION_TIME = 60  # Reconnection time will not be more than this value
 
@@ -139,41 +166,47 @@ class WebSocketDumper(Dumper):
         pass
 
     def get_url(self):
-        return 'ws://example.com'
+        return None
+
+    def send_message(self, ws, message):
+        ws.send(message)
+        self.call_listener(EventType.EMIT, message)
 
     def do_dump(self):
         # Get URL for target WebSocket stream
         url = self.get_url()
 
         def on_open(ws):
-            print('WebSocket opened for [%s]' % url)
+            self.logger.info('WebSocket opened for [%s]' % url)
+
             try:
                 # Do subscribing process
                 self.subscribe(ws)
             except:
-                print('Encountered an error when sending subscribing message')
+                self.logger.error('Encountered an error when sending subscribing message')
                 traceback.print_exc()
 
             # Calling a listener
-            self.call_listener(EventType.OPEN, None)
+            self.call_listener(EventType.OPEN, 'websocket,%d,%s' % (self.WEB_SOCKET_DUMPER_VERSION, url))
 
         def on_close(ws):
-            print('** WebSocket closed for [%s]' % url)
+            self.logger.warn('WebSocket closed for [%s]' % url)
             self.call_listener(EventType.EOF, None)
 
         def on_message(ws, message):
             self.call_listener(EventType.MSG, message)
 
-        def on_error(ws):
-            print('** Got WebSocket error [%s]:' % url)
-            print(ws)
+        def on_error(ws, error):
+            self.logger.error('Got WebSocket error [%s]:' % url)
+            self.logger.error(error)
             try:
                 ws.close()
             except:
-                print('ws.close() failed')
+                self.logger.error('ws.close() failed')
                 traceback.print_exc()
+            self.call_listener(EventType.ERR, error)
 
-        print('Connecting to [%s]...' % url)
+        self.logger.info('Connecting to [%s]...' % url)
 
         try:
             while True:
@@ -196,7 +229,7 @@ class WebSocketDumper(Dumper):
                             self.reconnection_time = self.MAX_RECONNECTION_TIME
 
                     # Wait
-                    print('** Waiting %d seconds for [%s]...' % (self.reconnection_time, url))
+                    self.logger.warn('Waiting %d seconds for [%s]...' % (self.reconnection_time, url))
                     time.sleep(self.reconnection_time)
                 else:
                     # Reset disconnection information, if it is
@@ -214,7 +247,7 @@ class WebSocketDumper(Dumper):
                 # Take disconnection timestamp
                 self.last_disconnect = datetime.datetime.now()
         except KeyboardInterrupt:
-            print('Got kill command, exiting main loop for [%s]...' % url)
+            self.logger.warn('Got kill command, exiting main loop for [%s]...' % url)
             return
 
 
@@ -223,6 +256,21 @@ class WebSocketDumper(Dumper):
 
 # This extends Dumper class and has set_listener function
 class BitflyerDumper(WebSocketDumper):
+    # Prefixes for individual channel
+    BITFLYER_CHANNEL_PREFIXES = [
+        'lightning_executions_',
+        'lightning_board_snapshot_',
+        'lightning_board_',
+        'lightning_ticker_',
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.product_codes = None
+
+    def create_logger(self):
+        return logging.getLogger('Bitflyer')
+
     def get_url(self):
         return 'wss://ws.lightstream.bitflyer.com/json-rpc'
 
@@ -236,26 +284,36 @@ class BitflyerDumper(WebSocketDumper):
             id=None,
         )
 
-        subscribe_obj['params']['channel'] = 'lightning_executions_FX_BTC_JPY'
-        subscribe_obj['id'] = 1
-        ws.send(json.dumps(subscribe_obj))
+        curr_id = 1
 
-        subscribe_obj['params']['channel'] = 'lightning_executions_BTC_JPY'
-        subscribe_obj['id'] = 2
-        ws.send(json.dumps(subscribe_obj))
+        # Send subscribe message
+        for product_code in self.product_codes:
+            for prefix in self.BITFLYER_CHANNEL_PREFIXES:
+                subscribe_obj['params']['channel'] = '%s%s' % (prefix, product_code)
+                subscribe_obj['id'] = curr_id
+                curr_id += 1
+                self.send_message(ws, json.dumps(subscribe_obj))
 
-        subscribe_obj['params']['channel'] = 'lightning_executions_ETH_BTC'
-        subscribe_obj['id'] = 3
-        ws.send(json.dumps(subscribe_obj))
+    def do_dump(self):
+        # Get markets
+        request = urllib.request.Request('https://api.bitflyer.com/v1/markets')
+        with urllib.request.urlopen(request) as response:
+            markets = json.load(response)
 
-        subscribe_obj['params']['channel'] = 'lightning_executions_BCH_BTC'
-        subscribe_obj['id'] = 4
-        ws.send(json.dumps(subscribe_obj))
+            # Response is like [{'product_code':'BTC_JPY'},{...}...]
+            # Convert it to an array of 'product_code'
+            self.product_codes = [obj['product_code'] for obj in markets]
+
+        super().do_dump()
 
 
 class BitmexDumper(WebSocketDumper):
     def get_url(self):
-        return 'wss://www.bitmex.com/realtime?subscribe=trade'
+        return 'wss://www.bitmex.com/realtime?subscribe=announcement,chat,connected,funding,' \
+               'instrument,insurance,liquidation,orderBookL2,publicNotifications,settlement,trade,liquidation'
+
+    def create_logger(self):
+        return logging.getLogger('Bitmex')
 
 
 class BitfinexDumper(WebSocketDumper):
@@ -269,12 +327,15 @@ class BitfinexDumper(WebSocketDumper):
     def get_url(self):
         return 'wss://api.bitfinex.com/ws/2'
 
+    def create_logger(self):
+        return logging.getLogger('Bitfinex')
+
     def do_dump(self):
         # Before starting dumping, bitfinex has too much currencies so it has channel limitation
         # of some channels, we must cherry pick the best one to observe it's trade
         # Realize this by retrieving trading volumes for each symbol, and pick coins which volume is in the most 250
 
-        print('Bitfinex: Retrieving market volumes')
+        self.logger.info('Retrieving market volumes')
 
         request = urllib.request.Request('https://api.bitfinex.com/v2/tickers?symbols=ALL')
         with urllib.request.urlopen(request) as response:
@@ -327,7 +388,7 @@ class BitfinexDumper(WebSocketDumper):
             # Trim it down to fit a channel limit
             self.sub_symbols = list(itr)[:self.BITFINEX_CHANNEL_LIMIT//2]
 
-        print('Bitfinex: Retrieving Done')
+        self.logger.info('Retrieving Done')
 
         # Call parent's do_dump
         super().do_dump()
@@ -344,19 +405,22 @@ class BitfinexDumper(WebSocketDumper):
 
         for symbol in self.sub_symbols:
             subscribe_obj['symbol'] = symbol
-            ws.send(json.dumps(subscribe_obj))
+            self.send_message(ws, json.dumps(subscribe_obj))
 
         subscribe_obj['channel'] = 'book'
 
         for symbol in self.sub_symbols:
             subscribe_obj['symbol'] = symbol
-            ws.send(json.dumps(subscribe_obj))
+            self.send_message(ws, json.dumps(subscribe_obj))
 
 
 '''Main'''
 
 
 if __name__ == '__main__':
+    # Setting config format
+    logging.basicConfig(format='[%(asctime)s][%(levelname)s] %(message)s', level=logging.INFO)
+
     def do_dump_bitmex():
         bm = BitmexDumper()
         bm.listener = FileWriteListener('./bitmex/', 'bitmex')
