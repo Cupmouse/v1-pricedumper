@@ -74,8 +74,8 @@ class LineProcessorV0(LineProcessor):
 
     DATETIME_FORMAT_DEFAULT = '%Y-%m-%d %H:%M:%S.%f'
 
-    HEAD_REGEX = re.compile('^0,(?P<time>[^,]+),(?P<prthead>(?P<prtname>[^,]+),(?P<prtver>[^,]+).*)$')
-    LINE_REGEX = re.compile('^(?P<type>emit|msg|error|head|eos),(?P<datetime>[^,]+),(?P<msg>.+)$')
+    HEAD_REGEX = re.compile(r'^0,(?P<time>[^,]+),(?P<prthead>(?P<prtname>[^,]+),(?P<prtver>[^,]+).*)$')
+    LINE_REGEX = re.compile(r'^(?P<type>emit|msg|error|head|eos),(?P<datetime>[^,]+),(?P<msg>.+)$')
 
     # head,[file_version],[protocol_name],[protocol_version],...
     def process_head(self):
@@ -176,8 +176,8 @@ class LineFileProtocolProcessor:
 
 
 class LFWebSocketProcessorV0(LineFileProtocolProcessor):
-    HEAD_REGEX = re.compile('^websocket,0,(?P<url>.+)$')
-    URL_REGEX = re.compile('^(http|https|ws|wss)://.+\.(?P<host>.+?\..+?)/.*$')
+    HEAD_REGEX = re.compile(r'^websocket,0,(?P<url>.+)$')
+    URL_REGEX = re.compile(r'^(http|https|ws|wss)://.+\.(?P<host>.+?\..+?)/.*$')
 
     def process_head(self):
         # Retrive parameters from head
@@ -364,7 +364,7 @@ if __name__ == '__main__':
             exit(1)
 
         # Extract head parameters necessary to recognize a file version
-        match = re.match('^head,(?P<filehead>(?P<filever>\d+?).*)$', line)
+        match = re.match(r'^head,(?P<filehead>(?P<filever>\d+?).*)$', line)
 
         if match is None:
             logger.error('Head format is invalid as line file')
