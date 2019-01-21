@@ -1,0 +1,11 @@
+# Visual Basic Code
+/.vscode
+# Intellij Idea
+/.idea
+/*.iml
+# Created files
+/bitfinex
+/bitflyer
+/bitmex
+# Misc
+/scripts

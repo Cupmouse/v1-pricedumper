@@ -5,11 +5,14 @@ from enum import Enum
 import datetime
 import time
 import logging
+import gzip
 
 import websocket
 import json
 import urllib.request
 
+
+DUMPER_VERSION = 'after_gzing'
 
 '''
 
@@ -51,13 +54,13 @@ class FileWriteListener(Listener):
         self.last_time_opened = None
         # Disable file reopening if True
         # self.disable_renewing = True
-        self.open_new_file()
         # Setup logger
         self.logger = logging.getLogger('FileWriteListener/%s' % prefix)
 
     def close_if_not(self):
         # x and y = if x is False then not evaluate y, about y is the same
         if self.file is not None and not self.file.closed:
+            self.logger.info('Closing file...')
             self.file.close()
 
     def open_new_file(self):
@@ -67,19 +70,23 @@ class FileWriteListener(Listener):
         # Concatenate directory, prefix, datetime, and proper extention into final file path
         now = datetime.datetime.now()
         formatted_datetime = now.strftime('%Y_%m_%d_%H_%M_%S')
-        file_path = self.directory + self.prefix + '.' + formatted_datetime + '.json.lines'
+        file_path = self.directory + self.prefix + '.' + formatted_datetime + '.json.lines.gz'
 
         # Making directories if not exist
         if not os.path.exists(self.directory):
             os.makedirs(self.directory)
 
+        self.logger.info('Opening file %s' % file_path)
+
         # Opening file
-        self.file = open(file_path, 'a')
+        self.file = gzip.open(file_path, 'at')
 
         # Record open time
         self.last_time_opened = now
 
     def on_event(self, call_type, message):
+        datetimenow = datetime.datetime.now()
+
         if call_type == EventType.MSG or call_type == EventType.EMIT or call_type == EventType.ERR:
             # Received meaningful message, record it
 
@@ -87,26 +94,30 @@ class FileWriteListener(Listener):
             # Calculate time difference between now and last file open,
             # subtraction of datetime will produce datetime.timedelta
             # by dividing it with timedelta having attribute 1 hours produces time difference in hours
-            if (datetime.datetime.now() - self.last_time_opened) / datetime.timedelta(hours=1)\
+            if (datetimenow - self.last_time_opened) / datetime.timedelta(hours=1)\
                     >= self.NEW_FILE_INTERVAL:
                 # This will reopen a new file in another name
                 self.open_new_file()
             elif self.file.closed:
                 # Reopen file (in another name)
-                self.logger.warn('file already closed, reopening...')
-                self.open_new_file()
+                self.logger.error('File already closed or not yet opened!')
+                self.logger.info(message)
+                return
 
             if call_type == EventType.MSG:
-                self.file.write(message + '\n')
+                self.file.write('msg,%s,%s\n' % (datetimenow, message))
             elif call_type == EventType.EMIT:
-                self.file.write('emit,' + message + '\n')
+                self.file.write('emit,%s,%s\n' % (datetimenow, message))
             elif call_type == EventType.ERR:
-                self.file.write('error,' + message + '\n')
+                self.file.write('error,%s,%s\n' % (datetimenow, message))
         elif call_type == EventType.OPEN:
-            # Write file that from this line, new stream appears
-            self.file.write('head,%d,%s\n' % (self.FILE_WRITE_LISTENER_VERSION, message))
+            # Beginning of a new file
+            self.open_new_file()
+            self.file.write('head,%d,%s,%s\n' % (self.FILE_WRITE_LISTENER_VERSION, datetimenow, message))
         elif call_type == EventType.EOF:
             # Stream from caller is ended, we can no longer expect any more messages, closing file
+            if not self.file.closed:
+                self.file.write('eos,%s,%s\n' % (datetimenow, message))
             self.close_if_not()
         else:
             raise RuntimeError('got unknown type ' + call_type)
@@ -179,15 +190,15 @@ class WebSocketDumper(Dumper):
         def on_open(ws):
             self.logger.info('WebSocket opened for [%s]' % url)
 
+            # Calling a listener
+            self.call_listener(EventType.OPEN, 'websocket,%d,%s' % (self.WEB_SOCKET_DUMPER_VERSION, url))
+
             try:
                 # Do subscribing process
                 self.subscribe(ws)
             except:
                 self.logger.error('Encountered an error when sending subscribing message')
                 traceback.print_exc()
-
-            # Calling a listener
-            self.call_listener(EventType.OPEN, 'websocket,%d,%s' % (self.WEB_SOCKET_DUMPER_VERSION, url))
 
         def on_close(ws):
             self.logger.warn('WebSocket closed for [%s]' % url)
@@ -199,14 +210,14 @@ class WebSocketDumper(Dumper):
         def on_error(ws, error):
             self.logger.error('Got WebSocket error [%s]:' % url)
             self.logger.error(error)
+
+            self.call_listener(EventType.ERR, str(error))
+
             try:
                 ws.close()
             except:
                 self.logger.error('ws.close() failed')
                 traceback.print_exc()
-            self.call_listener(EventType.ERR, error)
-
-        self.logger.info('Connecting to [%s]...' % url)
 
         try:
             while True:
@@ -215,26 +226,26 @@ class WebSocketDumper(Dumper):
                 # for not repeatedly connecting to the target server
                 if (self.last_disconnect is not None) and\
                         ((self.last_disconnect - datetime.datetime.now()) / datetime.timedelta(seconds=1) <= 5):
-                    # Increase disconnection count
-                    self.disconnection_count += 1
-
-                    # Must wait more than before
-                    if self.reconnection_time == 0:
-                        self.reconnection_time = 1
-                    else:
+                    if self.disconnection_count != 0:
+                        # Must wait more than before
                         # Set reconnection time as twice the time as before
                         self.reconnection_time *= 2
                         # Maximum reconnection time is MAX_RECONNECTION_TIME
                         if self.reconnection_time > self.MAX_RECONNECTION_TIME:
                             self.reconnection_time = self.MAX_RECONNECTION_TIME
 
-                    # Wait
-                    self.logger.warn('Waiting %d seconds for [%s]...' % (self.reconnection_time, url))
-                    time.sleep(self.reconnection_time)
+                        # Wait
+                        self.logger.warn('Waiting %d seconds for [%s]...' % (self.reconnection_time, url))
+                        time.sleep(self.reconnection_time)
+
+                    # Increase disconnection count
+                    self.disconnection_count += 1
                 else:
-                    # Reset disconnection information, if it is
-                    self.last_disconnect = None
+                    # Reset disconnection information
                     self.disconnection_count = 0
+                    self.reconnection_time = self.DEFAULT_RECONNECTION_TIME
+
+                self.logger.info('Connecting to [%s]...' % url)
 
                 # Open connection to target WebSocket server
                 self.ws_app = websocket.WebSocketApp(url,
@@ -420,6 +431,10 @@ class BitfinexDumper(WebSocketDumper):
 if __name__ == '__main__':
     # Setting config format
     logging.basicConfig(format='[%(asctime)s][%(levelname)s] %(message)s', level=logging.INFO)
+
+    logger = logging.getLogger('Main')
+
+    logger.info('Ver [%s] starting now...', DUMPER_VERSION)
 
     def do_dump_bitmex():
         bm = BitmexDumper()
