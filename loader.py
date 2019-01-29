@@ -236,6 +236,8 @@ class LFWSServiceBitflyer(LFWSService):
         # List of channels server allowed (returned response) to above subscribe message
         # The order is time response message recieved, earliest to latest 
         self._subscribed_channels = []
+        # Statuses for each channnel
+        self._status = {}
 
     def process_line(self, l: str):
         lp = self.get_line_processor()
@@ -291,10 +293,21 @@ class LFWSServiceBitflyer(LFWSService):
             # Message received, can be resut of a subscribe emit, or data
             if 'method' in msg:
                 # It is data
-                if msg['method'] == 'channelMessage':
-                    pass
-                else:
+                if msg['method'] != 'channelMessage':
                     raise ProcessingError('Unknown "method" %s' % msg['method'])
+
+                if 'params' not in msg:
+                    raise ProcessingError('"params" did not found')
+                params = msg['params']
+                if 'channel' not in params:
+                    raise ProcessingError('"channel" attribute did not found')
+                channel: str = params['channel']
+                # TODO Process channel data here
+
+                if channel.startswith('lightning_board_'):
+                    # Board information channel
+                    
+
             else:
                 # It is a subscribe response
                 if 'id' not in msg:
@@ -312,6 +325,7 @@ class LFWSServiceBitflyer(LFWSService):
                 # It successfully subscribed to channel with the msg id
                 self._subscribed_channels.append(subject_channel)
                 logger.debug('Successfully subscribed to channel %s' % subject_channel)
+
 
 # Map of line processors for a version
 LINE_PROCESSORS = {
