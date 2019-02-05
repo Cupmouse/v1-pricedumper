@@ -68,7 +68,7 @@ class FileWriteListener(Listener):
         self.close_if_not()
 
         # Concatenate directory, prefix, datetime, and proper extention into final file path
-        now = datetime.datetime.now()
+        now = datetime.datetime.utcnow()
         formatted_datetime = now.strftime('%Y_%m_%d_%H_%M_%S')
         file_path = self.directory + self.prefix + '.' + formatted_datetime + '.json.lines.gz'
 
@@ -85,7 +85,7 @@ class FileWriteListener(Listener):
         self.last_time_opened = now
 
     def on_event(self, call_type, message):
-        datetimenow = datetime.datetime.now()
+        datetimenow = datetime.datetime.utcnow()
 
         if call_type == EventType.MSG or call_type == EventType.EMIT or call_type == EventType.ERR:
             # Received meaningful message, record it
@@ -225,7 +225,7 @@ class WebSocketDumper(Dumper):
                 # it recognize as short period connection trial and wait certain seconds
                 # for not repeatedly connecting to the target server
                 if (self.last_disconnect is not None) and\
-                        ((self.last_disconnect - datetime.datetime.now()) / datetime.timedelta(seconds=1) <= 5):
+                        ((self.last_disconnect - datetime.datetime.utcnow()) / datetime.timedelta(seconds=1) <= 5):
                     if self.disconnection_count != 0:
                         # Must wait more than before
                         # Set reconnection time as twice the time as before
@@ -256,7 +256,7 @@ class WebSocketDumper(Dumper):
                 self.ws_app.run_forever()
 
                 # Take disconnection timestamp
-                self.last_disconnect = datetime.datetime.now()
+                self.last_disconnect = datetime.datetime.utcnow()
         except KeyboardInterrupt:
             self.logger.warn('Got kill command, exiting main loop for [%s]...' % url)
             return
