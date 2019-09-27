@@ -6,6 +6,7 @@ import datetime
 import time
 import logging
 import gzip
+import sys
 
 import websocket
 import json
@@ -45,6 +46,8 @@ class FileWriteListener(Listener):
     # File format version of this listener, if file format changes, increment this value
     FILE_WRITE_LISTENER_VERSION = 0
     NEW_FILE_INTERVAL = 24  # Hours
+    # Datetime format
+    DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S.%f'
 
     def __init__(self, directory, prefix):
         self.directory = directory
@@ -105,15 +108,15 @@ class FileWriteListener(Listener):
                 return
 
             if call_type == EventType.MSG:
-                self.file.write('msg,%s,%s\n' % (datetimenow, message))
+                self.file.write('msg,%s,%s\n' % (datetimenow.strftime(self.DATETIME_FORMAT), message))
             elif call_type == EventType.EMIT:
-                self.file.write('emit,%s,%s\n' % (datetimenow, message))
+                self.file.write('emit,%s,%s\n' % (datetimenow.strftime(self.DATETIME_FORMAT), message))
             elif call_type == EventType.ERR:
-                self.file.write('error,%s,%s\n' % (datetimenow, message))
+                self.file.write('error,%s,%s\n' % (datetimenow.strftime(self.DATETIME_FORMAT), message))
         elif call_type == EventType.OPEN:
             # Beginning of a new file
             self.open_new_file()
-            self.file.write('head,%d,%s,%s\n' % (self.FILE_WRITE_LISTENER_VERSION, datetimenow, message))
+            self.file.write('head,%d,%s,%s\n' % (self.FILE_WRITE_LISTENER_VERSION, datetimenow.strftime(self.DATETIME_FORMAT), message))
         elif call_type == EventType.EOF:
             # Stream from caller is ended, we can no longer expect any more messages, closing file
             if not self.file.closed:
@@ -428,6 +431,27 @@ class BitfinexDumper(WebSocketDumper):
 '''Main'''
 
 
+def do_dump_bitmex():
+    bm = BitmexDumper()
+    bm.listener = FileWriteListener('./bitmex/', 'bitmex')
+    bm.do_dump()
+
+def do_dump_bitflyer():
+    bf = BitflyerDumper()
+    bf.listener = FileWriteListener('./bitflyer/', 'bitflyer')
+    bf.do_dump()
+
+def do_dump_bitfinex():
+    bf = BitfinexDumper()
+    bf.listener = FileWriteListener('./bitfinex/', 'bitfinex')
+    bf.do_dump()
+
+DUMPERS = {
+    'bitmex': do_dump_bitmex,
+    'bitflyer': do_dump_bitflyer,
+    'bitfinex': do_dump_bitfinex,
+}
+
 if __name__ == '__main__':
     # Setting config format
     logging.basicConfig(format='[%(asctime)s][%(levelname)s] %(message)s', level=logging.INFO)
@@ -436,26 +460,16 @@ if __name__ == '__main__':
 
     logger.info('Ver [%s] starting now...', DUMPER_VERSION)
 
-    def do_dump_bitmex():
-        bm = BitmexDumper()
-        bm.listener = FileWriteListener('./bitmex/', 'bitmex')
-        bm.do_dump()
+    if len(sys.argv) != 2:
+        logger.error('Parameter needed')
+        exit(1)
 
-    def do_dump_bitflyer():
-        bf = BitflyerDumper()
-        bf.listener = FileWriteListener('./bitflyer/', 'bitflyer')
-        bf.do_dump()
+    if sys.argv[1] not in DUMPERS:
+        logger.error('Invalid parameter')
+        exit(1)
 
-    def do_dump_bitfinex():
-        bf = BitfinexDumper()
-        bf.listener = FileWriteListener('./bitfinex/', 'bitfinex')
-        bf.do_dump()
+    dumper = DUMPERS[sys.argv[1]]
 
-    thread_bfi = threading.Thread(target=do_dump_bitfinex)
-    thread_bfl = threading.Thread(target=do_dump_bitflyer)
-    thread_bim = threading.Thread(target=do_dump_bitmex)
-
-    thread_bfi.start()
-    thread_bfl.start()
-    thread_bim.start()
+    thread = threading.Thread(target=dumper)
+    thread.start()
 

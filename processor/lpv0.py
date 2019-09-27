@@ -36,6 +36,7 @@ class MessageType(Enum):
 
 class LineProcessorV0(LineProcessor):
     DATETIME_FORMAT_DEFAULT = '%Y-%m-%d %H:%M:%S.%f'
+    DATETIME_FORMAT_FALLBACK = '%Y-%m-%d %H:%M:%S'
 
     HEAD_REGEX = re.compile(r'^0,(?P<time>[^,]+),(?P<prthead>(?P<prtname>[^,]+),(?P<prtver>[^,]+).*)$')
     LINE_REGEX = re.compile(r'^(?P<type>emit|msg|error|head|eos),(?P<datetime>[^,]+),(?P<msg>.+)$')
@@ -94,7 +95,11 @@ class LineProcessorV0(LineProcessor):
         msg = match_obj.group('msg')
 
         # Convert datetime string to actual datetime instance
-        line_datetime = datetime.datetime.strptime(datetime_str, self.DATETIME_FORMAT_DEFAULT)
+        try:
+            line_datetime = datetime.datetime.strptime(datetime_str, self.DATETIME_FORMAT_DEFAULT)
+        except ValueError:
+            # Wierd, but if nanosecond is entirely 0, it is ommited
+            line_datetime = datetime.datetime.strptime(datetime_str, self.DATETIME_FORMAT_FALLBACK)
 
         # Update current pointed datetime only if this line is AHEAD of last time recorded
         if (line_datetime - self._pointed_datetime) / datetime.timedelta(microseconds=1) < 0:

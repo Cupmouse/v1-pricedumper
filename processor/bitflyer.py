@@ -1,16 +1,18 @@
 import logging
 import json
 import datetime
-from enum import Enum
+import re
+from enum import Enum, unique
 
 from processor import ProcessingError
 import lpv0
 from lpv0 import MessageType, LFWSService, LineFileProtocolProcessor, LineProcessorV0
-
+import database
 
 _logger = logging.getLogger('Bitflyer')
 
 
+@unique
 class ChannelType(Enum):
     EXECUTIONS = 0
     BOARD = 1
@@ -33,24 +35,7 @@ class ChannelType(Enum):
 
 class LFWSServiceBitflyer(LFWSService):
     DATETIME_FORMAT = '%Y-%m-%dT%H:%M:%S.%f'
-    DEF_TICKER_TABLE = dict(
-        timestamp='INTEGER NOT NULL',
-        best_bid='REAL NOT NULL',
-        best_ask='REAL NOT NULL',
-        best_bid_size='REAL NOT NULL',
-        best_ask_size='REAL NOT NULL',
-        total_bid_depth='REAL NOT NULL',
-        total_ask_depth='REAL NOT NULL',
-        last_traded_price='REAL NOT NULL',
-        volume='REAL NOT NULL',
-        volume_by_product='REAL NOT NULL',
-    )
-    DEF_BOARD_TABLE = dict(
-        timestamp='INTEGER NOT NULL',
-        bid_or_ask='INTEGER(1) NOT NULL',
-        price='REAL NOT NULL',
-        size='REAL NOT NULL'
-    )
+    CHANNEL_NAME_REGEX = re.compile(r'^(lightning_board_snapshot|lightning_board|lightning_ticker|lightning_executions)_(?P<product_code>\w+)$')
 
     def __init__(self, prop_p: LineFileProtocolProcessor, url: str):
         super().__init__(prop_p, url)
@@ -69,6 +54,8 @@ class LFWSServiceBitflyer(LFWSService):
         if lp.get_message_type() == MessageType.EOF:
             self._process_eos()
             return
+        elif lp.get_message_type() == MessageType.ERR:
+            return
 
         # Otherwise, message should be in json format
         res_obj = json.loads(l)
@@ -81,6 +68,20 @@ class LFWSServiceBitflyer(LFWSService):
                 self._process_general_response(res_obj)
             else:
                 self._process_subscribe_response(res_obj)
+
+    def _table_name_from_channel(self, channel_name: str):
+        ch_type = ChannelType.from_channel_name(channel_name)
+        if ch_type == ChannelType.BOARD_SNAPSHOT:
+            ch_type = ChannelType.BOARD
+            
+        match_object = self.CHANNEL_NAME_REGEX.match(channel_name)
+
+        if match_object is None:
+            raise ProcessingError('Undefined channel name')
+
+        product_code = match_object.group('product_code')
+
+        return '%s_%s' % (ch_type.name.lower(), product_code)
 
     def _process_subscribe_emit(self, res_obj: object):
         # Must be subscribe message
@@ -132,10 +133,12 @@ class LFWSServiceBitflyer(LFWSService):
         # Create new table
         db = self.get_line_processor().get_database()
         ch_type = ChannelType.from_channel_name(subject_channel)
+        table_name = self._table_name_from_channel(subject_channel)
+
         if ch_type == ChannelType.BOARD or ch_type == ChannelType.BOARD_SNAPSHOT:
-            db.create_table_if_not_exists(subject_channel, self.DEF_BOARD_TABLE)
+            db.create_table_if_not_exists(table_name, database.DEF_BOARD_TABLE)
         elif ch_type == ChannelType.TICKER:
-            db.create_table_if_not_exists(subject_channel, self.DEF_TICKER_TABLE)
+            db.create_table_if_not_exists(table_name, database.DEF_TICKER_TABLE)
         else:
             #TODO
             pass
@@ -143,6 +146,7 @@ class LFWSServiceBitflyer(LFWSService):
         _logger.debug('Successfully subscribed to channel %s' % subject_channel)
 
     def _process_eos(self):
+        _logger.info('Processing EOS...')
         # Check if it have all channels that it wanted to subscribe to, if not, it means this stream containts incomplete data
         # Set of channels it wanted to subscribe to
         emitted_channels = set(self._emitted_subscribe_id_vs_channel[i] for i in self._emitted_subscribe_id_vs_channel)
@@ -154,6 +158,9 @@ class LFWSServiceBitflyer(LFWSService):
         if len(not_subscribed_channels) > 0:
             # There are such channels at least one
             raise ProcessingError('Subscribe message emitted, but no response for channels %s, processed data are incomplete' % not_subscribed_channels)
+
+        # Commit all to database
+        self.get_line_processor().get_database().commit()
 
     def _process_general_response(self, res_obj: object):
         # It is data
@@ -176,7 +183,7 @@ class LFWSServiceBitflyer(LFWSService):
 
         if ch_type == ChannelType.BOARD or ch_type == ChannelType.BOARD_SNAPSHOT:
             # Board information channel
-            self._process_board_response(channel, message)
+            self._process_board_response(ch_type, channel, message)
         elif ch_type == ChannelType.TICKER:
             self._process_ticker_response(channel, message)
         elif ch_type == ChannelType.EXECUTIONS:
@@ -184,11 +191,26 @@ class LFWSServiceBitflyer(LFWSService):
         else:
             raise ProcessingError('Response of unknown channel "%s"' % channel)
 
-    def _process_board_response(self, channel_name: str, msg: object):
+    def _process_board_response(self, ch_type: ChannelType, channel_name: str, msg: object):
         lp = self.get_line_processor()
         db = lp.get_database()
-        
+
+        # Timestamp is according to lps'
         ts = lp.get_pointed_datetime()
+
+        table_name = self._table_name_from_channel(channel_name)
+
+        # Complete board snapshot will delete all state in board
+        if ch_type == ChannelType.BOARD_SNAPSHOT:
+            data = dict(
+                timestamp=ts,
+                type=database.BoardRecordType.CLEAR_ALL,
+                price=None,
+                amount=None,
+            )
+            db.insert(table_name, data)
+
+        # For each ask and bid, commit one record
 
         if 'asks' not in msg:
             raise ProcessingError('"asks" attribute did not found')
@@ -204,11 +226,11 @@ class LFWSServiceBitflyer(LFWSService):
                 raise ProcessingError('"size" attribute did not found')
             data = dict(
                 timestamp=ts,
-                bid_or_ask=0,
+                type=database.BoardRecordType.INSERT_SELL,
                 price=ask['price'],
-                size=ask['size']
+                size=ask['size'],
             )
-            db.insert(channel_name, data)
+            db.insert(table_name, data)
         for bid in bids:
             if 'price' not in bid:
                 raise ProcessingError('"price" attribute did not found')
@@ -216,11 +238,11 @@ class LFWSServiceBitflyer(LFWSService):
                 raise ProcessingError('"size" attribute did not found')
             data = dict(
                 timestamp=ts,
-                bid_or_ask=1,
+                type=database.BoardRecordType.INSERT_BUY,
                 price=bid['price'],
-                size=bid['size']
+                size=bid['size'],
             )
-            db.insert(channel_name, data)
+            db.insert(table_name, data)
 
     def _process_ticker_response(self, channel_name: str, msg: object):
         if 'product_code' not in msg:
@@ -230,6 +252,7 @@ class LFWSServiceBitflyer(LFWSService):
         # Convert timestamp to int
         ts = datetime.datetime.strptime(msg['timestamp'][:-2], self.DATETIME_FORMAT)
         # Insert data
+        table_name = self._table_name_from_channel(channel_name)
         data = dict(
             timestamp=ts,
             best_bid=msg['best_bid'],
@@ -242,7 +265,7 @@ class LFWSServiceBitflyer(LFWSService):
             volume=msg['volume'],
             volume_by_product=msg['volume_by_product'],
         )
-        db.insert(channel_name, data)
+        db.insert(table_name, data)
 
     def _process_execution_response(self, msg: object):
         pass
