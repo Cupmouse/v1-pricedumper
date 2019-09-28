@@ -4,10 +4,10 @@ import datetime
 import re
 from enum import Enum, unique
 
-from processor import ProcessingError
-import lpv0
-from lpv0 import MessageType, LFWSService, LineFileProtocolProcessor, LineProcessorV0
-import database
+from common.processor import ProcessingError
+import common.lpv0 as lpv0
+from common.lpv0 import MessageType, LFWSService, LineFileProtocolProcessor, LineProcessorV0
+import common.database as database
 
 _logger = logging.getLogger('Bitflyer')
 

@@ -3,7 +3,7 @@ import logging
 import gzip
 import re
 
-import processor
+import processors.common.processor as processor
 
 if __name__ == '__main__':
     if len(sys.argv) <= 2:
