@@ -332,7 +332,7 @@ class BitmexDumper(WebSocketDumper):
 
 class BitfinexDumper(WebSocketDumper):
     # Amount of channels Bitfinex allows to open at maximum
-    BITFINEX_CHANNEL_LIMIT = 250
+    BITFINEX_CHANNEL_LIMIT = 30
 
     def __init__(self):
         super().__init__()
