@@ -200,6 +200,7 @@ class WSSBitflyerProcessor(WSServiceProcessor):
         
         self._wsp.listener.ticker_insert(
             dict(
+                timestamp=datetime.datetime.strptime(msg['timestamp'][:-2], DATETIME_FORMAT),
                 best_bid=msg['best_bid'],
                 best_ask=msg['best_ask'],
                 best_bid_size=msg['best_bid_size'],
@@ -214,6 +215,22 @@ class WSSBitflyerProcessor(WSServiceProcessor):
 
     def _process_execution_response(self, msg: object):
         self._wsp.listener.trade_insert()
+
+
+
+    def _pair_name_from_channel(self, channel_name: str):
+        ch_type = ChannelType.from_channel_name(channel_name)
+        if ch_type == ChannelType.BOARD_SNAPSHOT:
+            ch_type = ChannelType.BOARD
+            
+        match_object = CHANNEL_NAME_REGEX.match(channel_name)
+
+        if match_object is None:
+            raise InvalidFormatError('Undefined channel name')
+
+        product_code = match_object.group('product_code')
+
+        return '%s_%s' % (ch_type.name.lower(), product_code)
 
 
 

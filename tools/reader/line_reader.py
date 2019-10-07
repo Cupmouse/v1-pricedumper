@@ -131,7 +131,10 @@ class FileLineReader():
             # Call protocol processor
             self._protocol.process_line('None')
             raise e
-        self._line_processed = False
+            
+        # Process line
+        self._process_line()
+        # Check if EOF or not
         return self._current_line != ''
 
     @property
@@ -184,16 +187,10 @@ class FileLineReader():
 
     @property
     def message_type(self) -> MessageType:
-        if not self._line_processed:
-            self._process_line()
-
         return self._message_type
 
     @property
     def message_time(self) -> datetime:
-        if not self._line_processed:
-            self._process_line()
-
         return self._current_time
 
     @property

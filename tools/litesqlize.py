@@ -2,8 +2,12 @@ import sys
 import logging
 import gzip
 import re
+from datetime import datetime
 
 from reader.line_reader import FileLineReader, InvalidFormatError
+import reader.processor.protocols as protocols
+import database.database as database
+from database.database import DatabaseWrtier
 
 if __name__ == '__main__':
     if len(sys.argv) <= 2:
@@ -36,74 +40,53 @@ if __name__ == '__main__':
 
 
 
+class Listener(protocols.Listener):
+    def __init__(self, db: DatabaseWrtier, lr: FileLineReader):
+        self.db = db
+        self.lr = lr
 
-def pair(pair_name: str):
-    # Create new table
-    ch_type = ChannelType.from_channel_name(subject_channel)
-    table_name = self._table_name_from_channel(subject_channel)
+    def board_start(self, data: dict):
+        # Create new table
+        self.db.create_table_if_not_exists(data.pair_name, database.DEF_BOARD_TABLE)
 
-    if ch_type == ChannelType.BOARD or ch_type == ChannelType.BOARD_SNAPSHOT:
-        db.create_table_if_not_exists(table_name, database.DEF_BOARD_TABLE)
-    elif ch_type == ChannelType.TICKER:
-        db.create_table_if_not_exists(table_name, database.DEF_TICKER_TABLE)
-    else:
-        #TODO
-        pass
+    def board_insert(self, data: dict):
+        inst = dict(
+            timestamp=self.lr.message_time(),
+            type=database.BoardRecordType.INSERT_SELL,
+            price=data.price,
+            size=data.size,
+        )
+        self.db.insert(data.pair_name, inst)
 
-    # Commit all to database
-    self.get_line_processor().get_database().commit()
-
-def board_clear():
-    # Complete board snapshot will delete all state in board
-    if ch_type == ChannelType.BOARD_SNAPSHOT:
-        data = dict(
-            timestamp=ts,
+    def board_clear(self, data: dict):
+        # Complete board snapshot will delete all state in board
+        inst = dict(
+            timestamp=self.lr.message_time(),
             type=database.BoardRecordType.CLEAR_ALL,
             price=None,
             amount=None,
         )
-        db.insert(table_name, data)
+        self.db.insert(data.pair_name, inst)
 
-def board_insert():
-    data = dict(
-        timestamp=ts,
-        type=database.BoardRecordType.INSERT_SELL,
-        price=ask['price'],
-        size=ask['size'],
-    )
-    db.insert(table_name, data)
+    def ticker_start(self, data: dict):
+        self.db.create_table_if_not_exists(data.pair_name, database.DEF_TICKER_TABLE)
 
-def ticker_insert():
-    # Convert timestamp to int
-    ts = datetime.datetime.strptime(msg['timestamp'][:-2], DATETIME_FORMAT)
-    # Insert data
-    table_name = self._table_name_from_channel(channel_name)
-    data = dict(
-        timestamp=ts,
-        best_bid=msg['best_bid'],
-        best_ask=msg['best_ask'],
-        best_bid_size=msg['best_bid_size'],
-        best_ask_size=msg['best_ask_size'],
-        total_bid_depth=msg['total_bid_depth'],
-        total_ask_depth=msg['total_ask_depth'],
-        last_traded_price=msg['ltp'],
-        volume=msg['volume'],
-        volume_by_product=msg['volume_by_product'],
-    )
-    db.insert(table_name, data)
+    def ticker_insert(self, data: dict):
+        # Insert data
+        inst = dict(
+            timestamp=data.timestamp,
+            best_bid=data.best_bid,
+            best_ask=data.best_ask,
+            best_bid_size=data.best_bid_size,
+            best_ask_size=data.best_ask_size,
+            total_bid_depth=data.total_bid_depth,
+            total_ask_depth=data.total_ask_depth,
+            last_traded_price=data.last_traded_price,
+            volume=data.volume,
+            volume_by_product=data.volume_by_product,
+        )
+        self.db.insert(data.pair_name, inst)
 
-
-
-def _table_name_from_channel(self, channel_name: str):
-    ch_type = ChannelType.from_channel_name(channel_name)
-    if ch_type == ChannelType.BOARD_SNAPSHOT:
-        ch_type = ChannelType.BOARD
-        
-    match_object = CHANNEL_NAME_REGEX.match(channel_name)
-
-    if match_object is None:
-        raise InvalidFormatError('Undefined channel name')
-
-    product_code = match_object.group('product_code')
-
-    return '%s_%s' % (ch_type.name.lower(), product_code)
+    def eos(self, pair_name: str):
+        # Commit all to database
+        self.db.commit()

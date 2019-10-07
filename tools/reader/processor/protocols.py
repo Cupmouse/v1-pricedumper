@@ -4,16 +4,22 @@ class RegistryError(Exception):
 
 
 class Listener():
-    def board_start(self):
+    def board_start(self, pair_name: str):
         pass
 
-    def board_insert(self):
+    def board_insert(self, pair_name: str):
         pass
 
-    def ticker_start(self):
+    def board_clear(self, pair_name: str):
         pass
 
-    def ticker_insert(self):
+    def ticker_start(self, pair_name: str):
+        pass
+
+    def ticker_insert(self, pair_name: str):
+        pass
+
+    def eos(self):
         pass
 
 
