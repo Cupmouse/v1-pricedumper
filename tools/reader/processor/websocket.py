@@ -2,8 +2,8 @@ import re
 import datetime
 
 from . import protocols 
-from .protocols import ProtocolProcessor, RegistryError
-from ..line_reader import InvalidFormatError, Head
+from .protocols import ProtocolProcessor, RegistryError, Listener
+from ..line_reader import InvalidFormatError, Head, MessageType
 
 
 
@@ -13,8 +13,8 @@ URL_REGEX = re.compile(r'^(http|https|ws|wss)://.+\.(?P<host>.+?\..+?)/.*$')
 
 
 class WebSocketProcessor(ProtocolProcessor):
-    def setup(self, protocol_head: str, ref_time: datetime.datetime):
-        super().setup(protocol_head)
+    def setup(self, protocol_head: str, ref_time: datetime.datetime, listener: Listener):
+        super().setup(protocol_head, ref_time, listener)
 
         # Retrive parameters from head
         match_obj = HEAD_REGEX.match(protocol_head)
@@ -27,11 +27,11 @@ class WebSocketProcessor(ProtocolProcessor):
         service_class = get_service(url, ref_time)
 
         # Make instance of service class and initialize
-        self._service_processor = service_class(self, url)
-        self._service_processor.setup()
+        self._service_processor = service_class()
+        self._service_processor.setup(self, url)
 
-    def process(self, line: str):
-        self._service_processor.process(line)
+    def process(self, msg_type: MessageType, line: str):
+        self._service_processor.process(msg_type, line)
 
 
 
@@ -41,7 +41,7 @@ class WSServiceProcessor:
         self._wsp = wsp
         self._url = url
 
-    def process(self, msg: str):
+    def process(self, msg_type: MessageType, msg: str):
         pass
 
     @property

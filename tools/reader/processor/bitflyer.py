@@ -45,7 +45,7 @@ class WSSBitflyerProcessor(WSServiceProcessor):
         # Statuses for each channnel
         self._status = {}
 
-    def process(self, msg: str, msg_type: MessageType):
+    def process(self, msg_type: MessageType, msg: str):
         # If message type is EOS, messge is not in json format
         if msg_type == MessageType.EOF:
             self._process_eos()
@@ -170,7 +170,7 @@ class WSSBitflyerProcessor(WSServiceProcessor):
             raise InvalidFormatError('Response of unknown channel "%s"' % channel)
 
     def _process_board_response(self, ch_type: ChannelType, channel_name: str, msg: object):
-        self._wsp.listener.board_clear()
+        self._wsp.listener.board_clear(channel_name)
 
         # For each ask and bid, commit one record
         if 'asks' not in msg:
@@ -185,22 +185,24 @@ class WSSBitflyerProcessor(WSServiceProcessor):
                 raise InvalidFormatError('"price" attribute did not found')
             if 'size' not in ask:
                 raise InvalidFormatError('"size" attribute did not found')
-            self._wsp.listener.board_insert('ask', dict(price=ask['price'], size=ask['size']) )
+            self._wsp.listener.board_insert(channel_name, 'ask', dict(price=ask['price'], size=ask['size']) )
 
         for bid in bids:
             if 'price' not in bid:
                 raise InvalidFormatError('"price" attribute did not found')
             if 'size' not in bid:
                 raise InvalidFormatError('"size" attribute did not found')
-            self._wsp.listener.board_insert('bid', dict(price=ask['price'], size=ask['size']) )
+            self._wsp.listener.board_insert(channel_name, 'bid', dict(price=bid['price'], size=bid['size']) )
 
     def _process_ticker_response(self, channel_name: str, msg: object):
         if 'product_code' not in msg:
             raise InvalidFormatError('"product_code" attribute did not found')
+
+        ts = datetime.datetime.strptime(msg['timestamp'][:-2], DATETIME_FORMAT)
         
-        self._wsp.listener.ticker_insert(
+        self._wsp.listener.ticker_insert(channel_name,
             dict(
-                timestamp=datetime.datetime.strptime(msg['timestamp'][:-2], DATETIME_FORMAT),
+                timestamp=ts,
                 best_bid=msg['best_bid'],
                 best_ask=msg['best_ask'],
                 best_bid_size=msg['best_bid_size'],

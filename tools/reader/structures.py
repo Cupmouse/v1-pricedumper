@@ -76,8 +76,6 @@ class Board(object):
             # Otherwise, it is not supported
             raise TypeError('"int" or "datetime.timedelta" type is supported as a "time_delta" parameter.')
 
-        pass
-
     def set_time(self, abs_time :datetime.datetime):
         """Change board state as setting absolute time to what is given on a \"abs_time\" parameter.\n
         After calling this function, board state will be set as if it is exactly at abs_time and passed it,

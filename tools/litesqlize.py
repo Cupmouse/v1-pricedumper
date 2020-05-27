@@ -3,40 +3,21 @@ import logging
 import gzip
 import re
 from datetime import datetime
+import sqlite3
+from contextlib import closing
 
+import reader.line_reader
 from reader.line_reader import FileLineReader, InvalidFormatError
 import reader.processor.protocols as protocols
 import database.database as database
 from database.database import DatabaseWrtier
 
-if __name__ == '__main__':
-    if len(sys.argv) <= 2:
-        print('Please specify file to process, and a file name of datadase to write the result')
-        exit(1)
 
-    # Set format for logger
-    logging.basicConfig(format='[%(asctime)s][%(levelname)s] %(message)s', level=logging.INFO)
-    # Initialize logger
-    logger = logging.getLogger('Main')
 
-    # Open compressed file with gzip with read, text option
-    with gzip.open(sys.argv[1], 'rt') as file:
-        logger.info('Opening file...')
-        reader = FileLineReader(file)
-        reader.setup()
-
-        # Start reading
-        logger.info('Processing lines from file...')
-        try:
-            while reader.next_line():
-                try:
-                    logger.info('%s' % reader.message_type)
-                except InvalidFormatError as e:
-                    logger.exception('Error occurred while processing a line\n%s' % e)
-                    exit(1)
-        except EOFError as e:
-            logger.exception('Reached EOF before explicit file terminal:\n%s' % e)
-            exit(1)
+# Set format for logger
+logging.basicConfig(format='[%(asctime)s][%(levelname)s] %(message)s', level=logging.INFO)
+# Initialize logger
+logger = logging.getLogger('Main')
 
 
 
@@ -45,20 +26,16 @@ class Listener(protocols.Listener):
         self.db = db
         self.lr = lr
 
-    def board_start(self, data: dict):
+    def board_start(self, pair_name: str):
         # Create new table
-        self.db.create_table_if_not_exists(data.pair_name, database.DEF_BOARD_TABLE)
+        self.db.create_table_if_not_exists(pair_name, database.DEF_BOARD_TABLE)
 
-    def board_insert(self, data: dict):
-        inst = dict(
-            timestamp=self.lr.message_time(),
-            type=database.BoardRecordType.INSERT_SELL,
-            price=data.price,
-            size=data.size,
-        )
-        self.db.insert(data.pair_name, inst)
+    def board_insert(self, pair_name: str, data: dict):
+        data['timestamp'] = self.lr.message_time()
+        data['type'] = database.BoardRecordType.
+        self.db.insert(data.pair_name, data)
 
-    def board_clear(self, data: dict):
+    def board_clear(self, pair_name: str):
         # Complete board snapshot will delete all state in board
         inst = dict(
             timestamp=self.lr.message_time(),
@@ -66,27 +43,41 @@ class Listener(protocols.Listener):
             price=None,
             amount=None,
         )
-        self.db.insert(data.pair_name, inst)
+        self.db.insert(pair_name, inst)
 
-    def ticker_start(self, data: dict):
-        self.db.create_table_if_not_exists(data.pair_name, database.DEF_TICKER_TABLE)
+    def ticker_start(self, pair_name: str):
+        self.db.create_table_if_not_exists(pair_name, database.DEF_TICKER_TABLE)
 
-    def ticker_insert(self, data: dict):
+    def ticker_insert(self, pair_name: str, data: dict):
         # Insert data
-        inst = dict(
-            timestamp=data.timestamp,
-            best_bid=data.best_bid,
-            best_ask=data.best_ask,
-            best_bid_size=data.best_bid_size,
-            best_ask_size=data.best_ask_size,
-            total_bid_depth=data.total_bid_depth,
-            total_ask_depth=data.total_ask_depth,
-            last_traded_price=data.last_traded_price,
-            volume=data.volume,
-            volume_by_product=data.volume_by_product,
-        )
-        self.db.insert(data.pair_name, inst)
+        self.db.insert(pair_name, data)
 
-    def eos(self, pair_name: str):
+    def eos(self):
         # Commit all to database
         self.db.commit()
+
+
+
+if __name__ == '__main__':
+    if len(sys.argv) <= 2:
+        print('Please specify file to process, and a file name of datadase to write the result')
+        exit(1)
+
+    # Open compressed file with gzip with read, text option
+    with gzip.open(sys.argv[1], 'rt') as file:
+        with database.open(sys.argv[2]) as db:
+            logger.info('Opening file...')
+            reader = FileLineReader(file)
+            reader.setup(Listener(db, reader))
+
+            # Start reading
+            logger.info('Processing lines from file...')
+            try:
+                while reader.next_line():
+                    pass
+            except EOFError as e:
+                logger.exception('Reached EOF before explicit file terminal:\n%s' % e)
+                exit(1)
+
+
+

@@ -48,24 +48,41 @@ sqlite3.register_adapter(datetime.datetime, _adapt_datetime)
 
 class DatabaseWrtier(object):
     def __init__(self):
-        self.connection = None
+        self._connection = None
+        self._url = None
 
-    def connect(self, url: str):
-        if self.connection is not None and not self.connection.closed:
+    def open(self, url: str):
+        if self._connection is not None:
             raise RuntimeError('Database not closed')
-        self.connection = sqlite3.connect(url)
+        self._url = url
+        self._connection = sqlite3.connect(url)
+
+    def close(self):
+        self._connection.close()
 
     # tdef is table defnition
     def create_table_if_not_exists(self, table_name: str, tdef: dict):
         dt = ','.join(['`%s` %s' % (key, val) for key, val in tdef.items()])
-        self.connection.execute('CREATE TABLE IF NOT EXISTS %s (%s)' % (table_name, dt))
+        self._connection.execute('CREATE TABLE IF NOT EXISTS %s (%s)' % (table_name, dt))
         
     def insert(self, table_name: str, data: dict):
-        self.connection.execute('INSERT INTO %s VALUES(%s)' % (table_name, ','.join(['?' for i in range(len(data))])), tuple(data.values()))
+        self._connection.execute('INSERT INTO %s VALUES(%s)' % (table_name, ','.join(['?' for i in range(len(data))])), tuple(data.values()))
 
     def commit(self):
-        self.connection.commit()
+        self._connection.commit()
 
     def __del__(self):
-        if self.connection is not None:
-            self.connection.close()
+        if self._connection is not None:
+            self._connection.close()
+
+class open():
+    def __init__(self, url: str):
+        self._db = DatabaseWrtier()
+        self._url = url
+
+    def __enter__(self):
+        self._db.open(self._url)
+        return self._db
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._db.close()

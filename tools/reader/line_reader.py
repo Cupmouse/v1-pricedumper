@@ -3,8 +3,7 @@ import datetime
 import re
 import logging
 
-from .processor import protocols
-from .processor.protocols import ProtocolProcessor
+
 
 _logger = logging.getLogger('Processor')
 
@@ -76,7 +75,7 @@ class Head():
 
     @property
     def protocol_head(self) -> str:
-        return self.protocol_head
+        return self._protocol_head
 
     @property
     def time(self) -> datetime:
@@ -90,16 +89,22 @@ class Head():
     def protocol_version(self) -> int:
         return self._protocol_version
 
+
+
+from .processor import protocols
+from .processor.protocols import ProtocolProcessor, Listener
+
+
+
 class FileLineReader():
     def __init__(self, file):
         self.file = file
         self._head = None
         self._current_line = None
         self._current_time = None
-        self._line_processed = False
         self._protocol = None
 
-    def setup(self):
+    def setup(self, listener: Listener):
         if self._head is not None:
             raise ProcessingError('Already setup')
         
@@ -116,10 +121,11 @@ class FileLineReader():
 
         # Initializing a protocol processor for an acquired information
         _logger.debug('Initializing a protocol instance: %s' % self._head._protocol_name)
-        self._protocol = protocols.get_protocol_class(self._head.protocol_name, self._head.protocol_version)(self, self._head.protocol_head)
+        protocol_class = protocols.get_protocol_class(self._head.protocol_name, self._head.protocol_version)
+        self._protocol = protocol_class()
 
         # Let a protocol interpreter process its head
-        self._protocol.setup()
+        self._protocol.setup(self._head.protocol_head, self._current_time, listener)
 
     def next_line(self):
         try:
@@ -181,9 +187,7 @@ class FileLineReader():
         self._message_type = message_type
 
         # Let protocol process a message
-        self._protocol.process_line(msg)
-
-        self._line_processed = True
+        self._protocol.process(self._message_type, msg)
 
     @property
     def message_type(self) -> MessageType:
